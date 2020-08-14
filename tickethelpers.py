@@ -29,6 +29,7 @@
 ###
 
 from bs4 import BeautifulSoup
+from gitlab import Gitlab
 import os
 import re
 import subprocess
@@ -265,7 +266,7 @@ class TicketHtmlTitleProvider(BaseProvider):
         return res
 
 
-class GitlabTitleProvider(TicketHtmlTitleProvider):
+class GitlabTitleProvider(BaseProvider):
     """A ticket information provider that extracts the title
        tag from GitLab issues at $url/$path/-/issues/$ticketnumber."""
 
@@ -277,7 +278,9 @@ class GitlabTitleProvider(TicketHtmlTitleProvider):
         if 'fixup' not in kwargs:
             kwargs['fixup'] = GitlabTitleProvider.gitlab_fixup
 
-        TicketHtmlTitleProvider.__init__(self, name, url, *args, **kwargs)
+
+        BaseProvider.__init__(self, name, *args, **kwargs)
+        self.gl = Gitlab(url)
 
     @staticmethod
     def gitlab_fixup(ticketnumber, title, extra):
@@ -286,16 +289,32 @@ class GitlabTitleProvider(TicketHtmlTitleProvider):
         m = re.match('(.*?)\s*(?:\(#[0-9]+\)) \S{1,2} Issues \S{1,2} .+(?: / .+) \S{1,2} GitLab$', title)
         if m and len(m.groups()) > 0: title = m.group(1)
 
-        # the url and ticketnumber can be added via a postfix, we do not need it here
-        #res = '%s#%s: %s - %s%s'%(extra['path'], extra['ticketnumber'], title, extra['url'], extra['ticketnumber'])
-        res = '%s#%s: %s'%(extra['path'], extra['ticketnumber'], title)
+        res = '%s#%s: %s - %s'%(extra['path'], extra['ticketnumber'], title, extra['url'])
         return res
 
     def _gettitle(self, ticketnumber):
         path, ticketnumber = ticketnumber
-        url = '%s%s/-/issues/' % (self.url, path)
-        res = super()._gettitle(ticketnumber, url=url)
-        res['url'] = url
+        group = self.gl.groups.get('tpo')
+        issues = group.issues.list(iids=ticketnumber)
+
+        res = {}
+        for issue in issues:
+            issue_path = issue.references['relative'].split("#")[0]
+            if issue_path.endswith("/"+path) or issue_path == path:
+                if 'title' in res:
+                    # if more than one project matches this issue, fail
+                    log.warning("More than one project, raising error")
+                    raise IndexError('More than one project with that name')
+                res['title'] = issue.title
+                res['url'] = issue.web_url
+                res['status'] = issue.state
+
+        if not 'title' in res:
+            # couldn't find any issues in provided project
+            log.warning("ticket %s#%s not found, raising error" % (ticketnumber, path))
+            raise IndexError('No ticket found')
+
+        res['title'] = "%s - [%s]" % (res['title'], res['status'])
         res['path'] = path
         res['ticketnumber'] = ticketnumber
         return res
