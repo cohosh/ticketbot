@@ -295,6 +295,10 @@ class GitlabTitleProvider(TicketHtmlTitleProvider):
         path, ticketnumber = ticketnumber
         url = '%s%s/-/issues/' % (self.url, path)
         res = super()._gettitle(ticketnumber, url=url)
+        # Instead of responding with an HTTP 404 error, GitLab returns the sign in page
+        # if the repository is either not public or doesn't exist
+        if (res['title'] == "Sign in · GitLab"):
+            raise IndexError('Project not found')
         res['url'] = url
         res['path'] = path
         res['ticketnumber'] = ticketnumber
